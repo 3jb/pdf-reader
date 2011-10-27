@@ -48,6 +48,7 @@ class PDF::Reader
       when :DCTDecode       then @filter = nil
       when :FlateDecode     then @filter = :flate
       when :JBIG2Decode     then @filter = nil
+      when :JPXDecode       then @filter = nil
       when :LZWDecode       then @filter = :lzw
       when :RunLengthDecode then @filter = :runlength
       else
@@ -126,7 +127,11 @@ class PDF::Reader
       out = ""
 
       while pos < data.length
-        length = data.getbyte(pos)
+        if data.respond_to?(:getbyte)
+          length = data.getbyte(pos)
+        else
+          length = data[pos]
+        end
         pos += 1
 
         case
@@ -166,7 +171,29 @@ class PDF::Reader
     end
     ################################################################################
     def tiff_depredict(data, opts = {})
-      raise UnsupportedFeatureError, "TIFF predictor not supported"
+      data        = data.unpack("C*")
+      unfiltered  = []
+      bpc         = opts[:BitsPerComponent] || 8
+      pixel_bits  = bpc * opts[:Colors]
+      pixel_bytes = pixel_bits / 8
+      line_len    = (pixel_bytes * opts[:Columns])
+      pos         = 0
+
+      if bpc != 8
+        raise UnsupportedFeatureError, "TIFF predictor onlys supports 8 Bits Per Component"
+      end
+
+      until pos > data.size
+        row_data = data[pos, line_len]
+        row_data.each_with_index do |byte, index|
+          left = index < pixel_bytes ? 0 : row_data[index - pixel_bytes]
+          row_data[index] = (byte + left) % 256
+        end
+        unfiltered += row_data
+        pos += line_len
+      end
+
+      unfiltered.pack("C*")
     end
     ################################################################################
     def png_depredict(data, opts = {})
@@ -174,7 +201,7 @@ class PDF::Reader
 
       data = data.unpack("C*")
 
-      pixel_bytes     = 1 #pixel_bitlength / 8
+      pixel_bytes     = opts[:Colors] || 1
       scanline_length = (pixel_bytes * opts[:Columns]) + 1
       row = 0
       pixels = []

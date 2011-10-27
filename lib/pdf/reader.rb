@@ -87,9 +87,9 @@ module PDF
   # == Encrypted Files
   #
   # Depending on the algorithm it may be possible to parse an encrypted file.
-  # For standard PDF encryption you'll need the :userpass option
+  # For standard PDF encryption you'll need the :password option
   #
-  #   reader = PDF::Reader.new("somefile.pdf", :userpass => "apples")
+  #   reader = PDF::Reader.new("somefile.pdf", :password => "apples")
   #
   class Reader
 
@@ -109,7 +109,7 @@ module PDF
     #
     # If the source file is encrypted you can provide a password for decrypting
     #
-    #   reader = PDF::Reader.new("somefile.pdf", :userpass => "apples")
+    #   reader = PDF::Reader.new("somefile.pdf", :password => "apples")
     #
     def initialize(input = nil, opts = {})
       if input # support the deprecated Reader API
@@ -118,12 +118,19 @@ module PDF
     end
 
     def info
-      @objects.deref(@objects.trailer[:Info])
+      dict = @objects.deref(@objects.trailer[:Info])
+      doc_strings_to_utf8(dict)
     end
 
     def metadata
       stream = @objects.deref(root[:Metadata])
-      stream ? stream.unfiltered_data : nil
+      if stream.nil?
+        nil
+      else
+        xml = stream.unfiltered_data
+        xml.force_encoding("utf-8") if xml.respond_to?(:force_encoding)
+        xml
+      end
     end
 
     def page_count
@@ -144,7 +151,7 @@ module PDF
     #
     # or
     #
-    #   PDF::Reader.open("somefile.pdf", :userpass => "apples") do |reader|
+    #   PDF::Reader.open("somefile.pdf", :password => "apples") do |reader|
     #     puts reader.pdf_version
     #   end
     #
@@ -269,6 +276,46 @@ module PDF
 
     private
 
+    # recursively convert strings from outside a content stream intop UTF-8
+    #
+    def doc_strings_to_utf8(obj)
+      case obj
+      when ::Hash then
+        {}.tap { |new_hash|
+          obj.each do |key, value|
+            new_hash[key] = doc_strings_to_utf8(value)
+          end
+        }
+      when Array then
+        obj.map { |item| doc_strings_to_utf8(item) }
+      when String then
+        if obj[0,2].unpack("C*") == [254, 255]
+          utf16_to_utf8(obj)
+        else
+          pdfdoc_to_utf8(obj)
+        end
+      else
+        obj
+      end
+    end
+
+    # TODO find a PDF I can use to spec this behaviour
+    #
+    def pdfdoc_to_utf8(obj)
+      obj.force_encoding("utf-8") if obj.respond_to?(:force_encoding)
+      obj
+    end
+
+    # one day we'll all run on a 1.9 compatible VM and I can just do this with
+    # String#encode
+    #
+    def utf16_to_utf8(obj)
+      str = obj[2, obj.size]
+      str = str.unpack("n*").pack("U*")
+      str.force_encoding("utf-8") if str.respond_to?(:force_encoding)
+      str
+    end
+
     def strategies
       @strategies ||= [
         ::PDF::Reader::MetadataStrategy,
@@ -284,8 +331,7 @@ module PDF
 end
 ################################################################################
 
-require 'pdf/reader/security_handler'
-require 'pdf/reader/decrypt'
+require 'pdf/reader/resource_methods'
 require 'pdf/reader/abstract_strategy'
 require 'pdf/reader/buffer'
 require 'pdf/reader/cmap'
@@ -305,6 +351,7 @@ require 'pdf/reader/parser'
 require 'pdf/reader/print_receiver'
 require 'pdf/reader/reference'
 require 'pdf/reader/register_receiver'
+require 'pdf/reader/standard_security_handler'
 require 'pdf/reader/stream'
 require 'pdf/reader/text_receiver'
 require 'pdf/reader/page_text_receiver'

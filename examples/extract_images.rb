@@ -1,7 +1,8 @@
+#!/usr/bin/env ruby
 # coding: utf-8
 
 # This demonstrates a way to extract some images (those based on the JPG or
-# TIFF formats) from a PDF. There are other ways to store images, so 
+# TIFF formats) from a PDF. There are other ways to store images, so
 # it may need to be expanded for real world usage, but it should serve
 # as a good guide.
 #
@@ -14,25 +15,145 @@ module ExtractImages
   class Extractor
 
     def page(page)
-      count = 0
-      page.xobjects.each do |name, stream|
-        stream = page.objects.deref(stream)
+      process_page(page, 0)
+    end
 
-        next unless stream.hash[:Subtype] == :Image
+    private
 
-        count += 1
+    def complete_refs
+      @complete_refs ||= {}
+    end
 
-        case stream.hash[:Filter]
-        when :CCITTFaxDecode
-          ExtractImages::Tiff.new(stream).save("#{page.number}-#{count}-#{name}.tif")
-        when :DCTDecode
-          ExtractImages::Jpg.new(stream).save("#{page.number}-#{count}-#{name}.jpg")
-        else
-          $stderr.puts "unrecognized image filter '#{stream.hash[:Filter]}'!"
+    def process_page(page, count)
+      xobjects = page.xobjects
+      return count if xobjects.empty?
+
+      xobjects.each do |name, stream|
+        case stream.hash[:Subtype]
+        when :Image then
+          count += 1
+
+          case stream.hash[:Filter]
+          when :CCITTFaxDecode then
+            ExtractImages::Tiff.new(stream).save("#{page.number}-#{count}-#{name}.tif")
+          when :DCTDecode      then
+            ExtractImages::Jpg.new(stream).save("#{page.number}-#{count}-#{name}.jpg")
+          else
+            ExtractImages::Raw.new(stream).save("#{page.number}-#{count}-#{name}.tif")
+          end
+        when :Form then
+          count = process_page(PDF::Reader::FormXObject.new(page, stream), count)
         end
+      end
+      count
+    end
+
+  end
+
+  class Raw
+    attr_reader :stream
+
+    def initialize(stream)
+      @stream = stream
+    end
+
+    def save(filename)
+      case @stream.hash[:ColorSpace]
+      when :DeviceCMYK then save_cmyk(filename)
+      when :DeviceGray then save_gray(filename)
+      when :DeviceRGB  then save_rgb(filename)
+      else
+        $stderr.puts "unsupport color depth #{@stream.hash[:ColorSpace]} #{filename}"
       end
     end
 
+    private
+
+    def save_cmyk(filename)
+      h    = stream.hash[:Height]
+      w    = stream.hash[:Width]
+      bpc  = stream.hash[:BitsPerComponent]
+      len  = stream.hash[:Length]
+      puts "#{filename}: h=#{h}, w=#{w}, bpc=#{bpc}, len=#{len}"
+
+      # Synthesize a TIFF header
+      long_tag  = lambda {|tag, count, value| [ tag, 4, count, value ].pack( "ssII" ) }
+      short_tag = lambda {|tag, count, value| [ tag, 3, count, value ].pack( "ssII" ) }
+      # header = byte order, version magic, offset of directory, directory count,
+      # followed by a series of tags containing metadata.
+      tag_count = 10
+      header = [ 73, 73, 42, 8, tag_count ].pack("ccsIs")
+      tiff = header.dup
+      tiff << short_tag.call( 256, 1, w ) # image width
+      tiff << short_tag.call( 257, 1, h ) # image height
+      tiff << long_tag.call( 258, 4, (header.size + (tag_count*12))) # bits per pixel
+      tiff << short_tag.call( 259, 1, 1 ) # compression
+      tiff << short_tag.call( 262, 1, 5 ) # colorspace - separation
+      tiff << long_tag.call( 273, 1, (10 + (tag_count*12) + 16) ) # data offset
+      tiff << short_tag.call( 277, 1, 4 ) # samples per pixel
+      tiff << long_tag.call( 279, 1, stream.unfiltered_data.size) # data byte size
+      tiff << short_tag.call( 284, 1, 1 ) # planer config
+      tiff << long_tag.call( 332, 1, 1)   # inkset - CMYK
+      tiff << [bpc, bpc, bpc, bpc].pack("IIII")
+      tiff << stream.unfiltered_data
+      File.open(filename, "wb") { |file| file.write tiff }
+    end
+
+    def save_gray(filename)
+      h    = stream.hash[:Height]
+      w    = stream.hash[:Width]
+      bpc  = stream.hash[:BitsPerComponent]
+      len  = stream.hash[:Length]
+      puts "#{filename}: h=#{h}, w=#{w}, bpc=#{bpc}, len=#{len}"
+
+      # Synthesize a TIFF header
+      long_tag  = lambda {|tag, count, value| [ tag, 4, count, value ].pack( "ssII" ) }
+      short_tag = lambda {|tag, count, value| [ tag, 3, count, value ].pack( "ssII" ) }
+      # header = byte order, version magic, offset of directory, directory count,
+      # followed by a series of tags containing metadata.
+      tag_count = 9
+      header = [ 73, 73, 42, 8, tag_count ].pack("ccsIs")
+      tiff = header.dup
+      tiff << short_tag.call( 256, 1, w ) # image width
+      tiff << short_tag.call( 257, 1, h ) # image height
+      tiff << short_tag.call( 258, 1, 8 ) # bits per pixel
+      tiff << short_tag.call( 259, 1, 1 ) # compression
+      tiff << short_tag.call( 262, 1, 1 ) # colorspace - grayscale
+      tiff << long_tag.call( 273, 1, (10 + (tag_count*12)) ) # data offset
+      tiff << short_tag.call( 277, 1, 1 ) # samples per pixel
+      tiff << long_tag.call( 279, 1, stream.unfiltered_data.size) # data byte size
+      tiff << short_tag.call( 284, 1, 1 ) # planer config
+      tiff << stream.unfiltered_data
+      File.open(filename, "wb") { |file| file.write tiff }
+    end
+
+    def save_rgb(filename)
+      h    = stream.hash[:Height]
+      w    = stream.hash[:Width]
+      bpc  = stream.hash[:BitsPerComponent]
+      len  = stream.hash[:Length]
+      puts "#{filename}: h=#{h}, w=#{w}, bpc=#{bpc}, len=#{len}"
+
+      # Synthesize a TIFF header
+      long_tag  = lambda {|tag, count, value| [ tag, 4, count, value ].pack( "ssII" ) }
+      short_tag = lambda {|tag, count, value| [ tag, 3, count, value ].pack( "ssII" ) }
+      # header = byte order, version magic, offset of directory, directory count,
+      # followed by a series of tags containing metadata.
+      tag_count = 8
+      header = [ 73, 73, 42, 8, tag_count ].pack("ccsIs")
+      tiff = header.dup
+      tiff << short_tag.call( 256, 1, w ) # image width
+      tiff << short_tag.call( 257, 1, h ) # image height
+      tiff << long_tag.call( 258, 3, (header.size + (tag_count*12))) # bits per pixel
+      tiff << short_tag.call( 259, 1, 1 ) # compression
+      tiff << short_tag.call( 262, 1, 2 ) # colorspace - RGB
+      tiff << long_tag.call( 273, 1, (header.size + (tag_count*12) + 12) ) # data offset
+      tiff << short_tag.call( 277, 1, 3 ) # samples per pixel
+      tiff << long_tag.call( 279, 1, stream.unfiltered_data.size) # data byte size
+      tiff << [bpc, bpc, bpc].pack("III")
+      tiff << stream.unfiltered_data
+      File.open(filename, "wb") { |file| file.write tiff }
+    end
   end
 
   class Jpg

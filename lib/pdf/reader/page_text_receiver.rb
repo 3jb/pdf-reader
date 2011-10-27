@@ -3,6 +3,11 @@
 require 'matrix'
 require 'yaml'
 
+begin
+  require 'psych'
+rescue LoadError
+end
+
 module PDF
   class Reader
     class PageTextReceiver
@@ -26,7 +31,8 @@ module PDF
         @objects = page.objects
         @fonts   = build_fonts(page.fonts)
         @form_fonts = {}
-        @content = ::Hash.new
+        @form_xobjects = {}
+        @content = {}
         @stack   = [DEFAULT_GRAPHICS_STATE]
       end
 
@@ -104,6 +110,10 @@ module PDF
         state[:text_font_size] = size
       end
 
+      def font_size
+        state[:text_font_size] * @text_matrix[0,0]
+      end
+
       def set_text_leading(leading)
         state[:text_leading] = leading
       end
@@ -126,10 +136,10 @@ module PDF
 
       def move_text_position(x, y) # Td
         temp_matrix = Matrix[
-                        [1, 0, 0],
-                        [0, 1, 0],
-                        [x, y, 1]
-                      ]
+          [1, 0, 0],
+          [0, 1, 0],
+          [x, y, 1]
+        ]
         @text_matrix = @text_line_matrix = temp_matrix * @text_line_matrix
       end
 
@@ -140,14 +150,14 @@ module PDF
 
       def set_text_matrix_and_text_line_matrix(a, b, c, d, e, f) # Tm
         @text_matrix = @text_line_matrix = Matrix[
-                              [a, b, 0],
-                              [c, d, 0],
-                              [e, f, 1]
-                            ]
+          [a, b, 0],
+          [c, d, 0],
+          [e, f, 1]
+        ]
       end
 
       def move_to_start_of_next_line # T*
-        move_text_position(0, state[:text_leading])
+        move_text_position(0, -state[:text_leading])
       end
 
       #####################################################
@@ -189,17 +199,20 @@ module PDF
       #####################################################
       def invoke_xobject(label)
         save_graphics_state
-        xobject = @objects.deref(@page.xobjects[label])
+        xobject   = @objects.deref(@form_xobjects[label])
+        xobject ||= @objects.deref(@page.xobjects[label])
 
         matrix = xobject.hash[:Matrix]
         concatenate_matrix(*matrix) if matrix
 
         if xobject.hash[:Subtype] == :Form
           form = PDF::Reader::FormXObject.new(@page, xobject)
-          @form_fonts = form.fonts
+          @form_fonts    = form.font_objects
+          @form_xobjects = form.xobjects
           form.walk(self)
         end
         @form_fonts = {}
+        @form_xobjects = {}
 
         restore_graphics_state
       end
@@ -209,9 +222,11 @@ module PDF
       # wrap the raw PDF Font objects in handy ruby Font objects.
       #
       def build_fonts(raw_fonts)
-        ::Hash[raw_fonts.map { |label, font|
+        wrapped_fonts = raw_fonts.map { |label, font|
           [label, PDF::Reader::Font.new(@objects, @objects.deref(font))]
-        }]
+        }
+
+        ::Hash[wrapped_fonts]
       end
 
       # transform x and y co-ordinates from the current text space to the
@@ -219,18 +234,16 @@ module PDF
       #
       def transform(point, z = 1)
         trm = text_rendering_matrix
-        Point.new(
-          (trm[0,0] * point.x) + (trm[1,0] * point.y) + (trm[2,0] * z),
-          (trm[0,1] * point.x) + (trm[1,1] * point.y) + (trm[2,1] * z)
-        )
+
+        point.transform(text_rendering_matrix, z)
       end
 
       def text_rendering_matrix
         state_matrix = Matrix[
-                         [state[:text_font_size] * state[:h_scaling], 0, 0],
-                         [0, state[:text_font_size], 0],
-                         [0, state[:text_rise], 1]
-                       ]
+          [font_size * state[:h_scaling], 0, 0],
+          [0, font_size, 0],
+          [0, state[:text_rise], 1]
+        ]
 
         state_matrix * @text_matrix * ctm
       end
@@ -246,15 +259,14 @@ module PDF
       # This returns a deep clone of the current state, ensuring changes are
       # keep separate from earlier states.
       #
-      # YAML is used to round-trip the state through a string to easily perform
-      # the deep clone. Kinda hacky, but effective.
+      # Marshal is used to round-trip the state through a string to easily
+      # perform the deep clone. Kinda hacky, but effective.
       #
       def clone_state
         if @stack.empty?
           {}
         else
-          yaml_state = YAML.dump(@stack.last)
-          YAML.load(yaml_state)
+          Marshal.load Marshal.dump(@stack.last)
         end
       end
 
@@ -271,15 +283,16 @@ module PDF
       # private class for representing points on a cartesian plain. Used
       # to simplify maths in the MinPpi class.
       #
-      class Point
-        attr_reader :x, :y
-
-        def initialize(x,y)
-          @x, @y = x,y
+      class Point < Struct.new(:x, :y)
+        def transform(trm, z)
+          Point.new(
+            (trm[0,0] * x) + (trm[1,0] * y) + (trm[2,0] * z),
+            (trm[0,1] * x) + (trm[1,1] * y) + (trm[2,1] * z)
+          )
         end
 
         def distance(point)
-          Math.hypot(point.x - x, point.y - y)
+          Math.hypot(point.x - @x, point.y - @y)
         end
       end
     end

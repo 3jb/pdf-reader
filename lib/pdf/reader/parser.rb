@@ -32,10 +32,10 @@ class PDF::Reader
     # Create a new parser around a PDF::Reader::Buffer object
     #
     # buffer - a PDF::Reader::Buffer object that contains PDF data
-    # ohash  - a PDF::Reader::ObjectHash object that can return objects from the PDF file
-    def initialize (buffer, ohash=nil)
+    # objects  - a PDF::Reader::ObjectHash object that can return objects from the PDF file
+    def initialize (buffer, objects=nil)
       @buffer = buffer
-      @ohash  = ohash
+      @objects  = objects
     end
     ################################################################################
     # Reads the next token from the underlying buffer and convets it to an appropriate
@@ -59,7 +59,8 @@ class PDF::Reader
       when "stream", "endstream"       then return Token.new(token)
       when ">>", "]", ">", ")"         then return Token.new(token)
       else
-        if operators.has_key?(token)   then return Token.new(token)
+        if token.respond_to?(:to_token) then return token.to_token
+        elsif operators.has_key?(token)   then return Token.new(token)
         elsif token =~ /\d*\.\d/       then return token.to_f
         else                           return token.to_i
         end
@@ -80,7 +81,7 @@ class PDF::Reader
       obj = parse_token
       post_obj = parse_token
       if post_obj == "stream"
-        stream(obj, id, gen)
+        stream(obj)
       else
         obj
       end
@@ -204,10 +205,10 @@ class PDF::Reader
     end
     ################################################################################
     # Decodes the contents of a PDF Stream and returns it as a Ruby String.
-    def stream (dict, *idgen)
+    def stream (dict)
       raise MalformedPDFError, "PDF malformed, missing stream length" unless dict.has_key?(:Length)
-      if @ohash
-        length = @ohash.object(dict[:Length])
+      if @objects
+        length = @objects.deref(dict[:Length])
       else
         length = dict[:Length] || 0
       end

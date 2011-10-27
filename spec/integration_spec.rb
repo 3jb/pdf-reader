@@ -2,7 +2,7 @@
 
 require File.dirname(__FILE__) + "/spec_helper"
 
-# These specs are a kind of "integration spec". They're not unit testing small pieces
+# These specs are a kind of integration spec. They're not unit testing small pieces
 # of code, it's just parsing a range of PDF files and ensuring the result is
 # consistent. An extra check to make sure parsing these files will continue
 # to work for our users.
@@ -10,7 +10,7 @@ require File.dirname(__FILE__) + "/spec_helper"
 # Where possible, specs that unit test correctly should be written in addition to
 # these
 
-describe PDF::Reader, "meta specs" do
+describe PDF::Reader, "integration specs" do
 
   it "should interpret unicode strings correctly" do
     filename = pdf_spec_file("cairo-unicode-short")
@@ -85,7 +85,11 @@ describe PDF::Reader, "meta specs" do
     filename = pdf_spec_file("hard_lock_under_osx")
 
     PDF::Reader.open(filename) do |reader|
-      reader.page(1).text[0,1].should eql("’")
+      if RUBY_VERSION >= "1.9"
+        reader.page(1).text[0,1].should eql("’")
+      else
+        reader.page(1).text[0,3].should eql("’")
+      end
     end
   end
 
@@ -96,7 +100,7 @@ describe PDF::Reader, "meta specs" do
     Timeout::timeout(3) do
       lambda {
         reader = PDF::Reader.new(filename)
-        reader.page(1).text
+        reader.info
       }.should raise_error(PDF::Reader::MalformedPDFError)
     end
   end
@@ -238,5 +242,30 @@ describe PDF::Reader, "meta specs" do
         reader.page(1).text
       end
     }.should raise_error(PDF::Reader::EncryptedPDFError)
+  end
+
+  it "should extract inline images correctly" do
+    @browser = PDF::Reader.new(pdf_spec_file("inline_image"))
+    @page    = @browser.page(1)
+
+    receiver = PDF::Reader::RegisterReceiver.new
+    @page.walk(receiver)
+
+    callbacks = receiver.series(:begin_inline_image, :begin_inline_image_data, :end_inline_image)
+
+    # inline images should trigger 3 callbacks. The first with no args.
+    callbacks[0].should == {:name => :begin_inline_image, :args => []}
+
+    # the second with the image header (colorspace, etc)
+    callbacks[1].should == {:name => :begin_inline_image_data, :args => [:CS, :RGB, :I, true, :W, 234, :H, 70, :BPC, 8]}
+
+    # the last with the image data
+    callbacks[2][:name].should == :end_inline_image
+    image_data =  callbacks[2][:args].first
+
+    image_data.should be_a(String)
+    image_data.size.should  == 49140
+    image_data[0,3].unpack("C*").should   == [255,255,255]
+    image_data[-3,3].unpack("C*").should  == [255,255,255]
   end
 end

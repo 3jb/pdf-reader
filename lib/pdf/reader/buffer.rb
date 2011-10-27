@@ -151,14 +151,11 @@ class PDF::Reader
     #
     def prepare_tokens
       10.times do
-        if state == :literal_string
-          prepare_literal_token
-        elsif state == :hex_string
-          prepare_hex_token
-        elsif state == :regular
-          prepare_regular_token
-        elsif state == :inline
-          prepare_inline_token
+        case state
+        when :literal_string then prepare_literal_token
+        when :hex_string     then prepare_hex_token
+        when :regular        then prepare_regular_token
+        when :inline         then prepare_inline_token
         end
       end
 
@@ -169,14 +166,12 @@ class PDF::Reader
     # Determine the current context/state by examining the last token we found
     #
     def state
-      if @tokens[-1] == "("
-        :literal_string
-      elsif @tokens[-1] == "<"
-        :hex_string
-      elsif @tokens[-1] == "stream"
-        :stream
-      elsif in_content_stream? && @tokens[-1] == "ID"
-        :inline
+      case @tokens.last
+      when "(" then :literal_string
+      when "<" then :hex_string
+      when "stream" then :stream
+      when "ID"
+        in_content_stream? ? :inline : :regular
       else
         :regular
       end
@@ -209,14 +204,19 @@ class PDF::Reader
     def prepare_inline_token
       str = ""
 
-      while str[-2,2] != "EI"
+      buffer = []
+
+      until buffer[0] =~ /\s/ && buffer[1, 2] == ["E", "I"]
         chr = @io.read(1)
-        break if chr.nil?
-        str << chr
+        buffer << chr
+
+        if buffer.length > 3
+          str << buffer.shift
+        end
       end
 
-      @tokens << str[0, str.size-2].strip
-      @io.seek(-2, IO::SEEK_CUR) unless chr.nil?
+      @tokens << string_token(str.strip)
+      @io.seek(-3, IO::SEEK_CUR) unless chr.nil?
     end
 
     # if we're currently inside a hex string, read hex nibbles until
@@ -341,6 +341,17 @@ class PDF::Reader
       chr = @io.read(1)
       @io.seek(-1, IO::SEEK_CUR) unless chr.nil?
       chr
+    end
+
+    # for a handful of tokens we want to tell the parser how to convert them
+    # into higher level tokens. This methods adds a to_token() method
+    # to tokens that should remain as strings.
+    #
+    def string_token(token)
+      def token.to_token
+        to_s
+      end
+      token
     end
   end
 end
