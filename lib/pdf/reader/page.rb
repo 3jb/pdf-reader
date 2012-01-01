@@ -46,11 +46,11 @@ module PDF
         "<PDF::Reader::Page page: #{@pagenum}>"
       end
 
-      # Returns the attributes that accompany this page. Includes
+      # Returns the attributes that accompany this page, including
       # attributes inherited from parents.
       #
       def attributes
-        {}.tap { |hash|
+        @attributes ||= {}.tap { |hash|
           page_with_ancestors.reverse.each do |obj|
             hash.merge!(@objects.deref(obj))
           end

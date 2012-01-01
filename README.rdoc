@@ -1,3 +1,20 @@
+= !PLEASE NOTE!
+
+All the examples below are for the latest (pre-release) version of the gem (0.11)
+
+If you have installed the gem via the rubygems with the command:
+
+    $ gem install pdf-reader
+
+Then the examples below *will not work* for you. Please check the examples that
+come with previous version of the gem (0.10).
+
+If you want to install the latest version of this gem use the command:
+
+    $ gem install pdf-reader --prerelease
+
+= Release Notes
+
 The PDF::Reader library implements a PDF parser conforming as much as possible
 to the PDF specification from Adobe.
 
@@ -32,7 +49,7 @@ this object.
     puts reader.metadata
     puts reader.page_count
 
-PDF::Reader.new can accept an IO stream or a filename. Here's an example with
+PDF::Reader.new accepts an IO stream or a filename. Here's an example with
 an IO stream:
 
     require 'open-uri'
@@ -40,6 +57,14 @@ an IO stream:
     io     = open('http://example.com/somefile.pdf')
     reader = PDF::Reader.new(io)
     puts reader.info
+
+If you open a PDF with File#open or IO#open, I strongly recommend using "rb"
+mode to ensure the file isn't mangled by ruby being 'helpful'.
+
+    File.open("somefile.pdf", "rb") do |io|
+      reader = PDF::Reader.new(io)
+      puts reader.info
+    end
 
 PDF is a page based file format, so most visible information is available via
 page-based iteration
@@ -80,9 +105,8 @@ The second method is preferred to increase the effectiveness of internal caching
 
 = Text Encoding
 
-Internally, text can be stored inside a PDF in various encodings, including
-zingbats, win-1252, mac roman and a form of Unicode. To avoid confusion, all
-text will be converted to UTF-8 before it is passed back from PDF::Reader.
+Regardless of the internal encoding used in the PDF all text will be converted
+to UTF-8 before it is passed back from PDF::Reader.
 
 Strings that contain binary data (like font blobs) will be marked as such on
 M17N aware VMs.
@@ -106,6 +130,16 @@ don't, 'rescue MalformedPDFError' will catch all the subclassed errors as well.
 
 Any other exceptions should be considered bugs in either PDF::Reader (please
 report it!).
+
+= PDF Integrity
+
+Windows developers may run into problems when running specs due to MalformedPDFError's
+This is usually because CRLF characters are automatically added to some of the PDF's in
+the spec folder when you checkout a branch from Git.
+
+To remove any invalid CRLF characters added while checking out a branch from Git, run:
+
+    rake fix_integrity
 
 = Maintainers
 

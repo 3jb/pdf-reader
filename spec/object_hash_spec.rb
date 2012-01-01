@@ -14,7 +14,7 @@ end
 describe PDF::Reader::ObjectHash do
   it "should correctly load a PDF from a StringIO object" do
     filename = pdf_spec_file("cairo-unicode")
-    io = StringIO.new(File.read(filename))
+    io = StringIO.new(binread(filename))
     h = PDF::Reader::ObjectHash.new(io)
 
     h.map { |ref, obj| obj.class }.size.should eql(57)
@@ -111,6 +111,20 @@ describe PDF::Reader::ObjectHash, "deref! method" do
   it "should recursively dereference references within arrays" do
     font = hash.deref! PDF::Reader::Reference.new(19, 0)
     font[:DescendantFonts][0][:Subtype].should eq :CIDFontType0
+  end
+
+  it "should return a new Hash, not mutate the provided Hash" do
+    orig_collection = {}
+    new_collection  = hash.deref!(orig_collection)
+
+    orig_collection.object_id.should_not == new_collection.object_id
+  end
+
+  it "should return a new Array, not mutate the provided Array" do
+    orig_collection = []
+    new_collection  = hash.deref!(orig_collection)
+
+    orig_collection.object_id.should_not == new_collection.object_id
   end
 
 end

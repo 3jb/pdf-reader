@@ -30,6 +30,7 @@ class PDF::Reader
 
     attr_accessor :default
     attr_reader :trailer, :pdf_version
+    attr_reader :sec_handler
 
     # Creates a new ObjectHash object. Input can be a string with a valid filename
     # or an IO-like object.
@@ -102,23 +103,20 @@ class PDF::Reader
     #
     def deref!(key)
       case object = deref(key)
-
-        when Hash
-          object.each do |key, value|
-            object[key] = deref! value
+      when Hash
+        {}.tap { |hash|
+          object.each do |k, value|
+            hash[k] = deref!(value)
           end
-
-        when PDF::Reader::Stream
-          deref! object.hash
-
-        when Array
-          object.each_with_index do |value, index|
-            object[index] = deref! value
-          end
-
+        }
+      when PDF::Reader::Stream
+        object.hash = deref!(object.hash)
+        object
+      when Array
+        object.map { |value| deref!(value) }
+      else
+        object
       end
-
-      object
     end
 
     # Access an object from the PDF. key can be an int or a PDF::Reader::Reference
@@ -262,6 +260,10 @@ class PDF::Reader
       trailer.has_key?(:Encrypt)
     end
 
+    def sec_handler?
+      !!sec_handler
+    end
+
     private
 
     def build_security_handler(opts = {})
@@ -277,11 +279,11 @@ class PDF::Reader
     end
 
     def decrypt(ref, obj)
-      return obj if @sec_handler.nil?
+      return obj unless sec_handler?
 
       case obj
       when PDF::Reader::Stream then
-        obj.data = @sec_handler.decrypt(obj.data, ref)
+        obj.data = sec_handler.decrypt(obj.data, ref)
         obj
       when Hash                then
         arr = obj.map { |key,val| [key, decrypt(ref, val)] }.flatten(1)
@@ -289,7 +291,7 @@ class PDF::Reader
       when Array               then
         obj.collect { |item| decrypt(ref, item) }
       when String
-        @sec_handler.decrypt(obj, ref)
+        sec_handler.decrypt(obj, ref)
       else
         obj
       end
@@ -340,7 +342,7 @@ class PDF::Reader
       if File.respond_to?(:binread)
         File.binread(input.to_s)
       else
-        File.read(input.to_s)
+        File.open(input.to_s,"rb") { |f| f.read }
       end
     end
 
